@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Escala Paróquia</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">✦</div>
+      <div>Escala Paróquia</div>
+    </div>
+
+    <div class="nav-section">ORGANIZAÇÃO</div>
+    <nav>
+      <button class="nav-item active" data-page="dashboard">Visão geral</button>
+      <button class="nav-item" data-page="calendar">Calendário</button>
+      <button class="nav-item" data-page="scale">Escala</button>
+    </nav>
+
+    <div class="nav-section cadastro-title">CADASTROS</div>
+    <nav>
+      <button class="nav-item" data-page="servers">Coroinhas</button>
+      <button class="nav-item" data-page="masses">Horários de missa</button>
+      <button class="nav-item" data-page="events">Eventos e feriados</button>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <div id="app"></div>
+  </main>
+
+  <div id="modalRoot"></div>
+  <div id="toast"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
