@@ -10,7 +10,7 @@ Aplicação simples para organizar coroinhas, horários de missa, eventos e esca
 4. Copie a **Project URL** e a chave **Publishable** (`sb_publishable_...`) para `config.js`. Nunca use a `service_role`/secret key no navegador.
 5. Abra `index.html` localmente ou publique a pasta como site estático. `config.js` contém apenas configuração pública; as políticas RLS no banco protegem os dados.
 
-As regras incluídas permitem que qualquer usuário autenticado da instância gerencie os dados da paróquia. Compartilhe contas apenas com responsáveis de confiança. Para acesso público de leitura da escala, será necessário criar uma política específica e uma tela pública separada.
+As contas autenticadas podem gerenciar os cadastros. Somente as escalas geradas ficam públicas para qualquer visitante, inclusive na tela de login.
 
 ## Publicação
 
@@ -23,7 +23,8 @@ Os cadastros antigos ficam no `localStorage` do navegador e não são transferid
 
 ## Limites atuais
 
-- A escala continua sendo uma distribuição simples por rodízio; revise antes de compartilhar.
+- Cada missa precisa de ao menos 9 coroinhas para as funções principais; os excedentes recebem Patena.
 - A disponibilidade escrita no cadastro ainda não restringe automaticamente a geração.
-- A página é privada e não possui uma visualização pública de escala.
+- As escalas geradas são públicas; os cadastros de coroinhas, missas e eventos continuam privados.
 - A conexão ao Supabase depende de internet.
+Após atualizar o schema para esta versão, execute `supabase-schema.sql` novamente: as vagas antigas abaixo de 9 serão ajustadas para 9 e a leitura pública das escalas será habilitada.

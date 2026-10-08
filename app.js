@@ -20,6 +20,11 @@ async function loadCloudData(){
   [state.servers, state.masses, state.events] = queries.slice(0,3).map(result => result.data || []);
   state.generated = Object.fromEntries(queries[3].data.map(row => [row.month, row.assignments]));
 }
+async function loadPublicScales(){
+  const {data,error} = await cloud.from("generated_scales").select("month,assignments").order("month",{ascending:false});
+  if(error) throw error;
+  state.generated = Object.fromEntries((data||[]).map(row=>[row.month,row.assignments]));
+}
 async function saveRow(table, row){
   const {error} = await cloud.from(table).upsert(row);
   if (error) { toast(`Não foi possível salvar: ${error.message}`); return false; }
@@ -39,17 +44,22 @@ async function signIn(){
 async function signOut(){await cloud.auth.signOut(); state.user=null; render();}
 async function startApp(){
   if(!cloud){state.loading=false;render();return;}
-  cloud.auth.onAuthStateChange((_event, session) => {
-    state.user = session?.user || null;
-    if(state.user) loadCloudData().then(()=>{state.loading=false;render()})
+  cloud.auth.onAuthStateChange((event, session) => {
+    if(event==="INITIAL_SESSION")return;
+    state.user=session?.user||null;
+    state.loading=true;render();
+    if(!state.user){state.servers=[];state.masses=[];state.events=[];}
+    const load=state.user?loadCloudData():loadPublicScales();
+    load.then(()=>{state.loading=false;render()})
       .catch(error=>{state.loading=false;toast(`Erro ao carregar dados: ${error.message}`);render()});
-    else {state.loading=false;render();}
   });
-  const {data:{session}} = await cloud.auth.getSession();
+  const {data:{session}}=await cloud.auth.getSession();
   state.user=session?.user||null;
-  if(state.user){try{await loadCloudData()}catch(error){toast(`Erro ao carregar dados: ${error.message}`)}}
+  try{if(state.user)await loadCloudData();else await loadPublicScales()}
+  catch(error){toast(`Erro ao carregar dados: ${error.message}`)}
   state.loading=false;render();
-}function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+}
+function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
 function fmtDate(iso){return new Intl.DateTimeFormat("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"}).format(new Date(iso+"T12:00:00"))}
 function localISO(date){return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`}
 function uid(){return Date.now()+Math.random().toString(16).slice(2)}
@@ -100,13 +110,16 @@ function calendar(){
     const iso=localISO(date);
     const ev=state.events.filter(e=>e.date===iso);
     const isToday=iso===localISO(new Date());
-    cells+=`<div class="day ${muted?"muted":""} ${isToday?"today":""}" onclick="${muted?"":"openEvent(null,'"+iso+"')"}"><div class="day-number">${date.getDate()}</div>${ev.map(e=>`<div class="event-dot" title="${esc(e.title)}">${esc(e.title)}</div>`).join("")}</div>`;
+    cells+=`<div class="day ${muted?"muted":""} ${isToday?"today":""}" onclick="${muted?"":"openEvent(null,'"+iso+"')"}"><div class="day-number">${date.getDate()}</div>${ev.map(e=>`<div class="event-dot ${e.type==="feriado"?"holiday-dot":"event-dot-mark"}" title="${esc(e.title)}">${esc(e.title)}</div>`).join("")}</div>`;
   }
+  const monthKey=`${y}-${String(m+1).padStart(2,"0")}`;
+  const monthEvents=state.events.filter(e=>e.date.startsWith(monthKey)).sort((a,b)=>a.date.localeCompare(b.date));
   return `<div class="page">${header("AGENDA PAROQUIAL","Calendário",`<button class="btn" onclick="openEvent()">+ evento</button><button class="btn btn-primary" onclick="go('scale')">gerar escala</button>`)}
     <div class="calendar-layout">
       <section class="card calendar-card">
         <div class="calendar-head"><button class="btn btn-small" onclick="changeMonth(-1)">‹</button><div class="calendar-title">${monthLabel(state.month)}</div><button class="btn btn-small" onclick="changeMonth(1)">›</button></div>
         <div class="calendar-grid">${["dom","seg","ter","qua","qui","sex","sáb"].map(x=>`<div class="weekday">${x}</div>`).join("")}${cells}</div>
+        <div class="calendar-mobile-events">${monthEvents.length?monthEvents.map(e=>`<div class="list-row"><div><div class="list-title">${esc(e.title)}</div><div class="list-date">${fmtDate(e.date)}</div></div><span class="legend-pill ${e.type==="feriado"?"gold":"green"}">${esc(e.type)}</span></div>`).join(""):`<div class="empty">Nenhum evento neste mês.</div>`}</div>
       </section>
       <aside class="card legend"><h2>Legenda</h2>
         <div class="legend-row"><span>missa</span><span class="legend-pill blue">• azul</span></div>
@@ -143,37 +156,81 @@ function events(){
  <div class="card card-pad">${state.events.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Evento</th><th>Data</th><th>Tipo</th><th></th></tr></thead><tbody>${state.events.sort((a,b)=>a.date.localeCompare(b.date)).map(e=>`<tr><td><strong>${esc(e.title)}</strong></td><td>${fmtDate(e.date)}</td><td><span class="legend-pill ${e.type==="feriado"?"gold":"green"}">${esc(e.type)}</span></td><td><button class="btn btn-small" onclick="openEvent('${e.id}')">editar</button> <button class="btn btn-small btn-danger" onclick="deleteEvent('${e.id}')">excluir</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="empty">Nenhum evento cadastrado.</div>`}</div></div>`;
 }
 
+function assignmentChips(assignments=[]){
+ return assignments.map(item=>{
+   const assignment=typeof item==="string"?{name:item,role:""}:item;
+   return `<span class="chip"><span>${esc(assignment.name)}</span>${assignment.role?`<small>${esc(assignment.role)}</small>`:""}</span>`;
+ }).join("");
+}
+function scaleCards(entries,key="",editable=false){
+ return `<div class="scale-list">${entries.map(item=>`<div class="card mass-card"><div class="mass-header"><div><h3>${fmtDate(item.date)} — ${esc(item.day)}</h3><div class="list-date">${esc(item.time)} • ${esc(item.place)}</div></div>${editable?`<button class="btn btn-small" onclick="replaceAssignment('${key}','${item.date}','${item.time}')">sortear novamente</button>`:""}</div><div class="server-chips">${assignmentChips(item.names)}</div></div>`).join("")}</div>`;
+}
 function scale(){
  const key=`${state.month.getFullYear()}-${String(state.month.getMonth()+1).padStart(2,"0")}`;
  const generated=state.generated[key];
- return `<div class="page">${header("DISTRIBUIÇÃO EQUILIBRADA","Escala de coroinhas",`<select class="select" onchange="setScaleMonth(this.value)"><option value="0">${monthLabel(state.month)}</option></select><button class="btn btn-primary" onclick="generateScale()">gerar escala do mês</button>`)}
- <p class="scale-sub">A geração usa rodízio entre os coroinhas ativos e respeita o dia da semana da missa. Revise conflitos e substituições antes de compartilhar.</p>
- <div class="notice">As escalas e cadastros ficam compartilhados online entre os responsaveis autenticados.</div>
- ${generated?`<div class="scale-list">${generated.map(x=>`<div class="card mass-card"><div class="mass-header"><div><h3>${fmtDate(x.date)} — ${esc(x.day)}</h3><div class="list-date">${esc(x.time)} • ${esc(x.place)}</div></div><button class="btn btn-small" onclick="replaceAssignment('${key}','${x.date}','${x.time}')">sortear novamente</button></div><div class="server-chips">${x.names.map(n=>`<span class="chip">${esc(n)}</span>`).join("")}</div></div>`).join("")}</div>`:`<div class="dashed">Clique em “gerar escala do mês” para distribuir os coroinhas entre as missas.</div>`}
+ const exists=Object.prototype.hasOwnProperty.call(state.generated,key);
+ const deleteAction=exists?`<button class="btn btn-danger" onclick="deleteScale('${key}')">excluir escala do mês</button>`:"";
+ return `<div class="page">${header("DISTRIBUIÇÃO DA ESCALA","Escala de coroinhas",`<select class="select" onchange="setScaleMonth(this.value)"><option value="0">${monthLabel(state.month)}</option></select><button class="btn btn-primary" onclick="generateScale()">gerar escala do mês</button>${deleteAction}`)}
+ <p class="scale-sub">Cada missa recebe Cruz, Tocha 1 e 2, Presbitério 1 e 2, Castiçal 1 e 2, Credência e Naveta. Coroinhas adicionais ficam na Patena.</p>
+ <div class="notice">A escala gerada fica visível publicamente nesta página e na tela de entrada.</div>
+ ${exists&&generated.length?scaleCards(generated,key,true):`<div class="dashed">Clique em “gerar escala do mês” para distribuir as funções.</div>`}
  </div>`;
 }
 function setScaleMonth(){/* reserved for future month selector */}
- function generateScale(){
- if(!state.servers.some(s=>s.active!==false)){toast("Cadastre ou ative pelo menos um coroinha.");return}
+function generateScale(){
+ const pool=state.servers.filter(s=>s.active!==false);
+ if(!pool.length){toast("Cadastre ou ative pelo menos um coroinha.");return}
  if(!state.masses.length){toast("Cadastre pelo menos um horário de missa.");return}
- const y=state.month.getFullYear(),m=state.month.getMonth(), days=new Date(y,m+1,0).getDate(), result=[];
- let pool=state.servers.filter(s=>s.active!==false);
+ if(state.masses.some(ms=>Number(ms.slots)<9)){toast("Cada horário de missa precisa de pelo menos 9 coroinhas. Edite os horários cadastrados.");return}
+ const shortPool=state.masses.find(ms=>Number(ms.slots)>pool.length);
+ if(shortPool){toast(`Há ${pool.length} coroinhas ativos, mas um horário precisa de ${shortPool.slots}.`);return}
+ const roles=["Cruz","Tocha 1","Tocha 2","Presbitério 1","Presbitério 2","Castiçal 1","Castiçal 2","Credência","Naveta"];
+ const y=state.month.getFullYear(),m=state.month.getMonth(),days=new Date(y,m+1,0).getDate(),result=[];
  let cursor=0;
  for(let d=1;d<=days;d++){
-   const date=new Date(y,m,d), weekday=date.getDay();
+   const date=new Date(y,m,d),weekday=date.getDay();
    state.masses.filter(ms=>Number(ms.weekday)===weekday).forEach(ms=>{
-     const slots=Math.max(1,Number(ms.slots||2)), names=[];
-     for(let j=0;j<slots;j++){if(!pool.length)break;names.push(pool[cursor%pool.length].name);cursor++}
-     if(names.length)result.push({date:localISO(date),day:date.toLocaleDateString("pt-BR",{weekday:"long"}),time:ms.time,place:ms.place||"Igreja",names});
+     const slots=Number(ms.slots),names=[];
+     for(let j=0;j<slots;j++){
+       names.push({name:pool[cursor%pool.length].name,role:roles[j]||"Patena"});
+       cursor++;
+     }
+     result.push({date:localISO(date),day:date.toLocaleDateString("pt-BR",{weekday:"long"}),time:ms.time,place:ms.place||"Igreja",names});
    });
  }
- const key=`${y}-${String(m+1).padStart(2,"0")}`;state.generated[key]=result;saveRow("generated_scales",{month:key,assignments:result}).then(ok=>{if(ok){toast("Escala gerada com sucesso.");render()}});
+ const key=`${y}-${String(m+1).padStart(2,"0")}`;
+ saveRow("generated_scales",{month:key,assignments:result}).then(ok=>{if(ok){state.generated[key]=result;toast("Escala gerada com sucesso.");render()}});
 }
 function replaceAssignment(key,date,time){
- const g=state.generated[key]; if(!g)return; const item=g.find(x=>x.date===date&&x.time===time); if(!item)return;
- if(state.servers.length>1){const names=state.servers.map(s=>s.name);item.names=item.names.map((n,i)=>names[(names.indexOf(n)+1+i)%names.length]);saveRow("generated_scales",{month:key,assignments:g}).then(ok=>{if(ok){render();toast("Substituição realizada.")}});}
+ const entries=state.generated[key];
+ const item=entries?.find(x=>x.date===date&&x.time===time);
+ const pool=state.servers.filter(s=>s.active!==false).map(s=>s.name);
+ if(!item)return;
+ if(pool.length<item.names.length){toast("Ative coroinhas suficientes para substituir esta escala.");return}
+ const first=typeof item.names[0]==="string"?item.names[0]:item.names[0]?.name;
+ const offset=(pool.indexOf(first)+1+pool.length)%pool.length;
+ item.names=item.names.map((assignment,i)=>({
+   name:pool[(offset+i)%pool.length],
+   role:typeof assignment==="string"?"":assignment.role
+ }));
+ saveRow("generated_scales",{month:key,assignments:entries}).then(ok=>{if(ok){render();toast("Substitui??o realizada.")}});
 }
-
+async function deleteScale(month){
+ if(!confirm(`Excluir toda a escala de ${monthLabel(new Date(`${month}-01T12:00:00`))}?`))return;
+ const {error}=await cloud.from("generated_scales").delete().eq("month",month);
+ if(error){toast(`Não foi possível excluir: ${error.message}`);return;}
+ delete state.generated[month];render();toast("Escala excluída.");
+}
+async function refreshPublicScales(){
+ try{await loadPublicScales();render()}catch(error){toast(`Não foi possível atualizar: ${error.message}`)}
+}
+function publicScheduleView(){
+ const months=Object.entries(state.generated).sort((a,b)=>b[0].localeCompare(a[0]));
+ const schedules=months.flatMap(([month,entries])=>entries.map(item=>({month,item})))
+   .sort((a,b)=>a.item.date.localeCompare(b.item.date)||a.item.time.localeCompare(b.item.time));
+ return `<section class="public-scales card card-pad"><div class="public-scales-head"><div><div class="eyebrow">ESCALAS DA PARÓQUIA</div><h2>Próximas celebrações</h2></div><button class="btn btn-small" onclick="refreshPublicScales()">atualizar</button></div>
+ ${schedules.length?scaleCards(schedules.map(entry=>entry.item)): `<div class="empty">Ainda não há escalas publicadas.</div>`}</section>`;
+}
 function openServer(id){
  const s=state.servers.find(x=>x.id===id)||{name:"",availability:"",active:true};
  modalRoot.innerHTML=`<div class="modal-backdrop" onclick="closeModal(event)"><div class="modal" onclick="event.stopPropagation()"><h2>${id?"Editar coroinha":"Novo coroinha"}</h2><div class="modal-sub">Cadastre o nome e uma referência de disponibilidade.</div>
@@ -184,13 +241,13 @@ async function saveServer(id){const obj={id:id||uid(),name:document.getElementBy
 async function deleteServer(id){if(confirm("Excluir este coroinha?")&&await deleteRow("servers",id)){state.servers=state.servers.filter(x=>x.id!==id);render()}}
 
 function openMass(id){
- const m=state.masses.find(x=>x.id===id)||{day:"Domingo",weekday:0,time:"09:00",place:"Igreja",slots:2};
+ const m=state.masses.find(x=>x.id===id)||{day:"Domingo",weekday:0,time:"09:00",place:"Igreja",slots:9};
  const days=["Domingo","Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sábado"];
  modalRoot.innerHTML=`<div class="modal-backdrop" onclick="closeModal(event)"><div class="modal" onclick="event.stopPropagation()"><h2>${id?"Editar horário":"Novo horário de missa"}</h2><div class="modal-sub">O dia da semana será usado para montar a escala mensal.</div>
- <div class="form-grid"><div class="field"><label>Dia da semana</label><select id="mDay">${days.map((d,i)=>`<option value="${i}" ${i==m.weekday?"selected":""}>${d}</option>`).join("")}</select></div><div class="field"><label>Horário</label><input id="mTime" type="time" value="${esc(m.time)}"></div><div class="field full"><label>Local</label><input id="mPlace" value="${esc(m.place)}" placeholder="Igreja matriz"></div><div class="field"><label>Vagas</label><input id="mSlots" type="number" min="1" max="20" value="${m.slots||2}"></div></div>
+ <div class="form-grid"><div class="field"><label>Dia da semana</label><select id="mDay">${days.map((d,i)=>`<option value="${i}" ${i==m.weekday?"selected":""}>${d}</option>`).join("")}</select></div><div class="field"><label>Horário</label><input id="mTime" type="time" value="${esc(m.time)}"></div><div class="field full"><label>Local</label><input id="mPlace" value="${esc(m.place)}" placeholder="Igreja matriz"></div><div class="field"><label>Coroinhas por missa (mínimo 9)</label><input id="mSlots" type="number" min="9" max="20" value="${Math.max(9,Number(m.slots)||9)}"></div></div>
  <div class="modal-actions"><button class="btn" onclick="closeModal()">cancelar</button><button class="btn btn-primary" onclick="saveMass('${id||""}')">salvar</button></div></div></div>`;
 }
-async function saveMass(id){const day=document.getElementById("mDay");const obj={id:id||uid(),day:day.options[day.selectedIndex].text,weekday:Number(day.value),time:document.getElementById("mTime").value,place:document.getElementById("mPlace").value.trim()||"Igreja",slots:Number(document.getElementById("mSlots").value)||2};if(!await saveRow("masses",obj))return;const i=state.masses.findIndex(x=>x.id===id);i>=0?state.masses[i]=obj:state.masses.push(obj);closeModal();render();toast("Horário salvo.")}
+async function saveMass(id){const day=document.getElementById("mDay");const slots=Number(document.getElementById("mSlots").value);if(slots<9||slots>20){toast("A missa precisa de pelo menos 9 coroinhas.");return}const obj={id:id||uid(),day:day.options[day.selectedIndex].text,weekday:Number(day.value),time:document.getElementById("mTime").value,place:document.getElementById("mPlace").value.trim()||"Igreja",slots};if(!await saveRow("masses",obj))return;const i=state.masses.findIndex(x=>x.id===id);i>=0?state.masses[i]=obj:state.masses.push(obj);closeModal();render();toast("Horário salvo.")}
 async function deleteMass(id){if(confirm("Excluir este horário?")&&await deleteRow("masses",id)){state.masses=state.masses.filter(x=>x.id!==id);render()}}
 
 function openEvent(id,datePreset){
@@ -203,6 +260,19 @@ async function saveEvent(id){const obj={id:id||uid(),title:document.getElementBy
 async function deleteEvent(id){if(confirm("Excluir este evento?")&&await deleteRow("events",id)){state.events=state.events.filter(x=>x.id!=id);render()}}
 
 function closeModal(e){if(!e||e.target.classList.contains("modal-backdrop"))modalRoot.innerHTML=""}
-function render(){if(state.loading){app.innerHTML=`<div class="page"><div class="card card-pad">Conectando...</div></div>`;return}if(!cloud){app.innerHTML=`<div class="page"><div class="card card-pad"><h2>Configuração pendente</h2><p>Crie o projeto online e preencha a URL e a chave pública no arquivo config.js.</p></div></div>`;return}if(!state.user){app.innerHTML=`<div class="page login-wrap"><form class="card card-pad login-card" onsubmit="event.preventDefault();signIn()"><h1>Escala Paróquia</h1><p>Acesso restrito aos responsáveis.</p><label for="loginEmail">E-mail</label><input id="loginEmail" type="email" autocomplete="username" required><label for="loginPassword">Senha</label><input id="loginPassword" type="password" autocomplete="current-password" required><button class="btn btn-primary" type="submit">Entrar</button></form></div>`;return}if(state.page==="dashboard")app.innerHTML=dashboard();else if(state.page==="calendar")app.innerHTML=calendar();else if(state.page==="servers")app.innerHTML=servers();else if(state.page==="masses")app.innerHTML=masses();else if(state.page==="events")app.innerHTML=events();else app.innerHTML=scale()}
+function render(){
+ if(state.loading){app.innerHTML=`<div class="page"><div class="card card-pad">Conectando...</div></div>`;return}
+ if(!cloud){app.innerHTML=`<div class="page"><div class="card card-pad"><h2>Configuração pendente</h2><p>Preencha a URL e a chave pública no arquivo config.js.</p></div></div>`;return}
+ if(!state.user){
+   app.innerHTML=`<div class="page"><div class="auth-layout"><form class="card card-pad login-card" onsubmit="event.preventDefault();signIn()"><h1>Escala Paróquia</h1><p>Acesso dos responsáveis.</p><label for="loginEmail">E-mail</label><input id="loginEmail" type="email" autocomplete="username" required><label for="loginPassword">Senha</label><input id="loginPassword" type="password" autocomplete="current-password" required><button class="btn btn-primary" type="submit">Entrar</button></form>${publicScheduleView()}</div></div>`;
+   return;
+ }
+ if(state.page==="dashboard")app.innerHTML=dashboard();
+ else if(state.page==="calendar")app.innerHTML=calendar();
+ else if(state.page==="servers")app.innerHTML=servers();
+ else if(state.page==="masses")app.innerHTML=masses();
+ else if(state.page==="events")app.innerHTML=events();
+ else app.innerHTML=scale();
+}
 render();
 startApp();
